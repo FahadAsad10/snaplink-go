@@ -1,0 +1,25 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      BASE_URL: http://localhost:8080
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+volumes:
+  redisdata:

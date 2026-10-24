@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Format
+        run: test -z "$(gofmt -l .)"
+      - name: Vet
+        run: go vet ./...
+      - name: Unit tests (race detector)
+        run: go test -race -cover ./...
+      - name: End-to-end against real Redis
+        run: |
+          go build -o snaplink ./cmd/snaplink
+          REDIS_URL=redis://localhost:6379/0 ./snaplink &
+          for i in $(seq 20); do curl -sf localhost:8080/healthz && break; sleep 0.5; done
+          code=$(curl -sf -X POST localhost:8080/api/links -d '{"url":"https://go.dev"}' | jq -r .code)
+          test "$(curl -s -o /dev/null -w '%{http_code}' localhost:8080/$code)" = 302
+          test "$(curl -sf localhost:8080/api/links/$code | jq .clicks)" = 1
+
+  image:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        if: github.event_name == 'push'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build (and push to GHCR on main)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: ${{ github.event_name == 'push' }}
+          tags: ghcr.io/fahadasad10/snaplink-go:latest,ghcr.io/fahadasad10/snaplink-go:${{ github.sha }}

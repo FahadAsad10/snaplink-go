@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: snaplink
+data:
+  REDIS_URL: redis://redis:6379/0
+  BASE_URL: http://localhost:8080
+  RATE_PER_MINUTE: "30"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: snaplink
+  labels: { app: snaplink }
+spec:
+  replicas: 2
+  selector:
+    matchLabels: { app: snaplink }
+  strategy:
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  template:
+    metadata:
+      labels: { app: snaplink }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: /metrics
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: snaplink
+          image: ghcr.io/fahadasad10/snaplink-go:latest
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - configMapRef: { name: snaplink }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: snaplink
+spec:
+  selector: { app: snaplink }
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: snaplink
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: snaplink
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }
